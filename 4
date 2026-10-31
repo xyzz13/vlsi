@@ -1,0 +1,147 @@
+library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+use IEEE.NUMERIC_STD.ALL; 
+
+entity lcd is
+    Port ( clk_12MHz : in  STD_LOGIC;
+           lcd_rs : out  STD_LOGIC;
+           lcd_en : out  STD_LOGIC;
+           lcd_data : out  STD_LOGIC_VECTOR (7 downto 0);
+           rst : in  STD_LOGIC);
+end lcd;
+
+architecture Behavioral of lcd is
+
+    -- Clock divider & tick generator
+    signal div_counter : unsigned(19 downto 0) := (others => '0');
+    signal tick        : std_logic := '0';
+
+    -- Internal signals
+    signal lcd_rs_s  : STD_LOGIC := '0';
+    signal lcd_en_s  : STD_LOGIC := '0';
+    signal dataout_s : STD_LOGIC_VECTOR(7 downto 0) := (others => '0');
+
+    type state is (
+        power_up, init0, init1, init2, init3, set_ddram,
+        d0, d1, d2, d3, done, hold
+    );
+    signal ps, nx : state := power_up;
+    
+    -- Enable pulse counter
+    signal en_counter : unsigned(3 downto 0) := (others => '0');
+
+begin
+
+    -- Fixed mappings
+    lcd_en   <= lcd_en_s; -- Replaced 'cd'
+    lcd_rs   <= lcd_rs_s;
+    lcd_data <= dataout_s;
+
+    -- 1. Tick Generator (No gated clocks)
+    process(clk_12MHz, rst)
+    begin
+        if rst = '1' then
+            div_counter <= (others => '0');
+            tick <= '0';
+        elsif rising_edge(clk_12MHz) then
+            div_counter <= div_counter + 1;
+            if div_counter = x"FFFFF" then
+                tick <= '1';
+            else
+                tick <= '0';
+            end if;
+        end if;
+    end process;
+    -- 2. State Register (Uses main clock + tick enable)
+    process(clk_12MHz, rst)
+    begin
+        if rst = '1' then
+            ps <= power_up;
+        elsif rising_edge(clk_12MHz) then
+            if tick = '1' then
+                ps <= nx;
+            end if;
+        end if;
+    end process;
+
+    -- 3. Next State & Output Logic (Combinational)
+    process(ps)
+    begin
+        -- Default assignments to prevent latches
+        nx        <= ps;
+        lcd_rs_s  <= '0';
+        dataout_s <= (others => '0');
+
+        case ps is
+            when power_up =>
+                nx <= init0;
+
+            when init0 =>
+                dataout_s <= "00111000";
+                nx        <= init1;
+
+            when init1 =>
+                dataout_s <= "00001100";
+                nx        <= init2;
+            when init2 =>
+                dataout_s <= "00000001";
+                nx        <= init3;
+
+            when init3 =>
+                dataout_s <= "00000110";
+                nx        <= set_ddram;
+
+            when set_ddram =>
+                dataout_s <= "10000000";
+                nx        <= d0;
+
+            when d0 =>
+                lcd_rs_s  <= '1';
+                dataout_s <= "01001001";
+                nx        <= d1;
+            when d1 =>
+                lcd_rs_s  <= '1';
+                dataout_s <= "00110010";
+                nx        <= d2;
+
+            when d2 =>
+                lcd_rs_s  <= '1';
+                dataout_s <= "01001001";
+                nx        <= d3;
+
+            when d3 =>
+                lcd_rs_s  <= '1';
+                dataout_s <= "01010100";
+                nx        <= done;
+            when done =>
+                dataout_s <= "00000010";
+                nx        <= hold;
+
+            when hold =>
+                dataout_s <= "00000010";
+
+            when others =>
+                nx <= power_up;
+        end case;
+    end process;
+
+    -- 4. LCD Enable Pulse Generator (Sequential)
+    process(clk_12MHz, rst)
+    begin
+        if rst = '1' then
+            lcd_en_s   <= '0';
+            en_counter <= (others => '0');
+        elsif rising_edge(clk_12MHz) then
+            if tick = '1' then
+                lcd_en_s   <= '1'; 
+                en_counter <= "1111";
+            elsif en_counter > 0 then
+                en_counter <= en_counter - 1;
+                lcd_en_s   <= '1';
+            else
+                lcd_en_s   <= '0';
+            end if;
+        end if;
+    end process;
+
+end Behavioral;
